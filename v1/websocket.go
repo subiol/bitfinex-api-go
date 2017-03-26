@@ -133,30 +133,52 @@ func (w *WebSocketService) sendSubscribeMessages() error {
 	return nil
 }
 
+func (w *WebSocketService) sendPing() error {
+	err := w.ws.WriteMessage(websocket.TextMessage, "{\"event\":\"ping\"}")
+	if err != nil {
+		// Can't send message to web socket.
+		return err
+	}
+	return nil
+}
+
 // Subscribe allows to subsribe to channels and watch for new updates.
 // This method supports next channels: book, trade, ticker.
-func (w *WebSocketService) Subscribe(readTimeout time.Duration) error {
+func (w *WebSocketService) Subscribe(pingTimeout time.Duration, pingDelay time.Duration) error {
 	// Subscribe to each channel
 	if err := w.sendSubscribeMessages(); err != nil {
 		return err
 	}
 
 	var msg string
+	nextPing := time.Now()
+	wakingForNextPing := false
 
 	for {
-		if readTimeout == 0 {
-			w.ws.SetReadDeadline(time.Time{}) // zero Time = no deadline
-		} else {
-			w.ws.SetReadDeadline(time.Now().Add(readTimeout))
+		if now := time.Now(); nextPing <= now {
+			if err = w.sendPing(); err != nil {
+				return err
+			}
+			w.ws.SetReadDeadline(now.Add(pingTimeout))
+			nextPing = now.Add(pingTimeout + pingDelay)
+			wakingForNextPing = false
 		}
 		_, p, err := w.ws.ReadMessage()
 		msg = string(p)
 		if err != nil {
+			if wakingForNextPing && nextPing <= time.Now() {
+				continue
+			}
 			return err
 		}
 
 		if strings.Contains(msg, "event") {
-			w.handleEventMessage(msg)
+			if strings.Contains(msg, "pong") { //!!!
+				w.ws.SetReadDeadline(nextPing)
+				wakingForNextPing = true
+			} else {
+				w.handleEventMessage(msg)
+			}
 		} else {
 			w.handleDataMessage(msg)
 		}
