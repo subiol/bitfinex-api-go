@@ -51,6 +51,7 @@ type WebSocketService struct {
 	privateWs *websocket.Conn
 	// map internal channels to websocket's
 	chanMap    map[float64]chan []float64
+	updatesMap map[float64]chan [][]float64
 	subscribes []subscribeToChannel
 }
 
@@ -65,6 +66,7 @@ type subscribeToChannel struct {
 	Channel string
 	Pair    string
 	Chan    chan []float64
+	Updates chan [][]float64
 }
 
 // NewWebSocketService returns a WebSocketService using the given client.
@@ -72,6 +74,7 @@ func NewWebSocketService(c *Client) *WebSocketService {
 	return &WebSocketService{
 		client:     c,
 		chanMap:    make(map[float64]chan []float64),
+		updatesMap: make(map[float64]chan [][]float64),
 		subscribes: make([]subscribeToChannel, 0),
 	}
 }
@@ -102,11 +105,12 @@ func (w *WebSocketService) Close() {
 	w.ws.Close()
 }
 
-func (w *WebSocketService) AddSubscribe(channel string, pair string, c chan []float64) {
+func (w *WebSocketService) AddSubscribe(channel string, pair string, c chan []float64, updates chan [][]float64) {
 	s := subscribeToChannel{
 		Channel: channel,
 		Pair:    pair,
 		Chan:    c,
+		Updates: updates,
 	}
 	w.subscribes = append(w.subscribes, s)
 }
@@ -173,6 +177,7 @@ func (w *WebSocketService) handleEventMessage(msg string) {
 		for _, k := range w.subscribes {
 			if event.Event == "subscribed" && event.Pair == k.Pair && event.Channel == k.Channel {
 				w.chanMap[event.ChanID] = k.Chan
+				w.updatesMap[event.ChanID] = k.Updates
 			}
 		}
 	}
@@ -213,8 +218,13 @@ func (w *WebSocketService) handleDataMessage(msg string) {
 			err = json.Unmarshal(i, &items)
 			if err == nil {
 				chanID := fullPayload[0].(float64)
-				for _, v := range items {
-					w.chanMap[chanID] <- v
+				updatesChan := w.updatesMap[chanID]
+				if updatesChan != nil {
+					updatesChan <- items
+				} else {
+					for _, v := range items {
+						w.chanMap[chanID] <- v
+					}
 				}
 			}
 		}
